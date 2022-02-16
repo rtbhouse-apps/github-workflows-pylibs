@@ -1,0 +1,272 @@
+name: "CI / CD"
+
+on: [workflow_call]
+
+defaults:
+  run:
+    shell: "bash"
+
+jobs:
+  ci:
+    name: "CI"
+    runs-on: "ubuntu-latest"
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10"]
+        poetry-version: ["1.1.13"]
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: "Checkout"
+        uses: "actions/checkout@v2"
+
+      - name: "Authenticate to Google Cloud"
+        id: "gcp-auth"
+        uses: "google-github-actions/auth@v0"
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "projects/716804851657/locations/global/workloadIdentityPools/github-actions-identity-pool/providers/github-identity-pool-provider"
+          service_account: "github-actions@rtbhouse-apps.iam.gserviceaccount.com"
+
+      - name: "Get secrets"
+        id: "secrets"
+        uses: "google-github-actions/get-secretmanager-secrets@v0"
+        with:
+          secrets: |-
+            PYPI_RO_TOKEN:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_RO_TOKEN
+
+      - name: "Setup python ${{ matrix.python-version }}"
+        uses: "actions/setup-python@v2"
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      - name: "Setup poetry ${{ matrix.poetry-version }}"
+        run: |
+          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: "Configure poetry"
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry config repositories.rtbhouse-apps https://dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/
+          poetry config http-basic.rtbhouse-apps token ${{ steps.secrets.outputs.PYPI_RO_TOKEN }}
+
+      - name: "Set up poetry cache"
+        uses: "actions/cache@v2"
+        id: "cache"
+        with:
+          path: ".venv"
+          key: "venv-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}"
+          restore-keys: "venv-${{ matrix.python-version }}-"
+
+      - name: "Install dependencies"
+        id: "install-dependencies"
+        run: |
+          poetry install --remove-untracked --no-root
+
+      - name: "Lint"
+        run: |
+          ./bin/lint.sh
+
+      - name: "Test"
+        run: |
+          ./bin/test.sh
+        if: >
+          success()
+          || (failure()
+            && steps.install-dependencies.conclusion == 'success')
+
+  release-development-package:
+    name: "Release development package"
+    runs-on: "ubuntu-latest"
+    if: "${{ !contains('refs/heads/master refs/heads/main', github.ref) }}"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        poetry-version: ["1.1.13"]
+    
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: "Checkout release scripts"
+        uses: "actions/checkout@v2"
+        with:
+          repository: "rtbhouse-apps/github-workflows-pylibs"
+          ref: "master"
+          path: "github-workflows-pylibs"
+
+      - name: "Checkout"
+        uses: "actions/checkout@v2"
+        with:
+          path: "pylib"
+
+      - name: "Authenticate to Google Cloud"
+        id: "gcp-auth"
+        uses: "google-github-actions/auth@v0"
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "projects/716804851657/locations/global/workloadIdentityPools/github-actions-identity-pool/providers/github-identity-pool-provider"
+          service_account: "github-actions@rtbhouse-apps.iam.gserviceaccount.com"
+
+      - name: "Get secrets"
+        id: "secrets"
+        uses: "google-github-actions/get-secretmanager-secrets@v0"
+        with:
+          secrets: |-
+            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS
+
+      - name: "Setup python ${{ matrix.python-version }}"
+        uses: "actions/setup-python@v2"
+        with:
+          python-version: "${{ matrix.python-version }}"
+          cache: "pip"
+
+      - name: "Setup poetry ${{ matrix.poetry-version }}"
+        run: |
+          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: "Configure poetry"
+        env:
+          PYPI_RW_AUTH: ${{ steps.secrets.outputs.PYPI_RW_AUTH }}
+        run: |
+          export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
+          export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
+          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/" >> $GITHUB_ENV
+          poetry config virtualenvs.in-project true
+          poetry config repositories.rtbhouse-apps-publish https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/
+          poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
+
+      - name: "Install util packages"
+        run: |
+          pip install -r github-workflows-pylibs/requirements.txt
+
+      - name: "Assert prod version"
+        run: |
+          cd pylib
+          python ../github-workflows-pylibs/pylib.py assert-prod-version
+      
+      - name: "Assert version available"
+        run: |
+          cd pylib
+          python ../github-workflows-pylibs/pylib.py assert-version-available
+
+      - name: "Set next dev version"
+        run: |
+          cd pylib
+          python ../github-workflows-pylibs/pylib.py set-next-dev-version
+
+      - name: "Publish dev package"
+        run: |
+          cd pylib
+          poetry publish --build --no-interaction --repository rtbhouse-apps-publish
+
+
+  release-final-package:
+    name: "Release final package"
+    runs-on: "ubuntu-latest"
+    needs: "ci"
+    if: "${{ contains('refs/heads/master refs/heads/main', github.ref) }}"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        poetry-version: ["1.1.13"]
+    
+    permissions:
+      contents: "write"
+      id-token: "write"
+
+    steps:
+      - name: "Checkout release scripts"
+        uses: "actions/checkout@v2"
+        with:
+          repository: "rtbhouse-apps/github-workflows-pylibs"
+          ref: "master"
+          path: "github-workflows-pylibs"
+
+      - name: "Checkout"
+        uses: "actions/checkout@v2"
+        with:
+          path: "pylib"
+
+      - name: "Authenticate to Google Cloud"
+        id: "gcp-auth"
+        uses: "google-github-actions/auth@v0"
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "projects/716804851657/locations/global/workloadIdentityPools/github-actions-identity-pool/providers/github-identity-pool-provider"
+          service_account: "github-actions@rtbhouse-apps.iam.gserviceaccount.com"
+
+      - name: "Get secrets"
+        id: "secrets"
+        uses: "google-github-actions/get-secretmanager-secrets@v0"
+        with:
+          secrets: |-
+            PYPI_RO_TOKEN:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_RO_TOKEN
+            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS
+
+      - name: "Setup python ${{ matrix.python-version }}"
+        uses: "actions/setup-python@v2"
+        with:
+          python-version: "${{ matrix.python-version }}"
+          cache: "pip"
+
+      - name: "Setup poetry ${{ matrix.poetry-version }}"
+        run: |
+          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: "Configure poetry"
+        env:
+          PYPI_RW_AUTH: "${{ steps.secrets.outputs.PYPI_RW_AUTH }}"
+        run: |
+          export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
+          export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
+          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/" >> $GITHUB_ENV
+          poetry config virtualenvs.in-project true
+          poetry config repositories.rtbhouse-apps-publish https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/
+          poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
+
+      - name: "Install util packages"
+        run: |
+          pip install -r github-workflows-pylibs/requirements.txt
+
+      - name: "Assert prod version"
+        run: |
+          cd pylib
+          python ../github-workflows-pylibs/pylib.py assert-prod-version
+
+      - name: "Assert version available"
+        run: |
+          cd pylib
+          python ../github-workflows-pylibs/pylib.py assert-version-available
+      
+      - name: Get version
+        id: get-version
+        run: |
+          cd pylib
+          echo ::set-output name=version::$(poetry version -s)
+
+      - name: "Publish final package"
+        run: |
+          cd pylib
+          poetry publish --build --no-interaction --repository rtbhouse-apps-publish
+
+      - name: Create release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get-version.outputs.version }}
+          release_name: v${{ steps.get-version.outputs.version }}
