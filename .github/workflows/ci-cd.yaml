@@ -56,6 +56,29 @@ jobs:
           poetry config repositories.rtbhouse-apps https://dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/
           poetry config http-basic.rtbhouse-apps token ${{ steps.secrets.outputs.PYPI_RO_TOKEN }}
 
+      - name: "Install toml parser"
+        run: |
+          npm install toml
+
+      - name: "Get poetry install extras"
+        id: "get-install-extras"
+        uses: "actions/github-script@v6"
+        with:
+          result-encoding: string
+          script: |
+            const fs = require("fs");
+            var toml = require("toml");
+
+            const file = fs.readFileSync("pyproject.toml", "utf-8");
+            const document = toml.parse(file);
+
+            try {
+              const keys = Object.keys(document["tool"]["poetry"]["extras"]);
+              return keys.map((key) => "-E " + key).join(" ");
+            } catch {
+              return "";
+            }
+      
       - name: "Set up poetry cache"
         uses: "actions/cache@v2"
         id: "cache"
@@ -67,7 +90,7 @@ jobs:
       - name: "Install dependencies"
         id: "install-dependencies"
         run: |
-          poetry install --remove-untracked --no-root
+          poetry install --remove-untracked --no-root ${{ steps.get-install-extras.outputs.result }}
 
       - name: "Lint"
         run: |
