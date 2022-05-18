@@ -205,6 +205,10 @@ jobs:
           python-version: "${{ matrix.python-version }}"
           cache: "pip"
 
+       - name: "Install util packages"
+        run: |
+          pip install -r github-workflows-pylibs/requirements.txt
+
       - name: "Setup poetry ${{ matrix.poetry-version }}"
         run: |
           curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
@@ -220,10 +224,6 @@ jobs:
           poetry config virtualenvs.in-project true
           poetry config repositories.rtbhouse-apps-publish ${{ inputs.lib-repo-url }}
           poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
-
-      - name: "Install util packages"
-        run: |
-          pip install -r github-workflows-pylibs/requirements.txt
 
       - name: "Assert prod version"
         run: |
