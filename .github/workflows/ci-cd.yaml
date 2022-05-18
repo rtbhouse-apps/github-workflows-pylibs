@@ -37,6 +37,22 @@ on:
         required: false
         default: "ubuntu-latest"
         type: "string"
+      lib-repo-url:
+        description: "Repository to put the library on publish"
+        required: false
+        default: "https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/"
+        type: "string"
+      lib-pip-url:
+        description: "Address part of pip extra repo url"
+        required: false
+        default: "dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/"
+        type: "string"
+      lib-repo-secret:
+        description: "Secret that stores credentials to login to repository"
+        required: false
+        default: "CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS"
+        type: "string"
+      
 
 defaults:
   run:
@@ -181,7 +197,7 @@ jobs:
         uses: "google-github-actions/get-secretmanager-secrets@v0"
         with:
           secrets: |-
-            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS
+            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/${{ inputs.lib-repo-secret }}
 
       - name: "Setup python ${{ matrix.python-version }}"
         uses: "actions/setup-python@v2"
@@ -200,9 +216,9 @@ jobs:
         run: |
           export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
           export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
-          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/" >> $GITHUB_ENV
+          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@${{ inputs.lib-pip-url }}" >> $GITHUB_ENV
           poetry config virtualenvs.in-project true
-          poetry config repositories.rtbhouse-apps-publish https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/
+          poetry config repositories.rtbhouse-apps-publish ${{ inputs.lib-repo-url }}
           poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
 
       - name: "Install util packages"
