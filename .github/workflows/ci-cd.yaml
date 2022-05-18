@@ -176,7 +176,7 @@ jobs:
         uses: "actions/checkout@v2"
         with:
           repository: "rtbhouse-apps/github-workflows-pylibs"
-          ref: "master"
+          ref: "different_repo"
           path: "github-workflows-pylibs"
 
       - name: "Checkout"
