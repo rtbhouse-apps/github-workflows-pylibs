@@ -176,7 +176,7 @@ jobs:
         uses: "actions/checkout@v2"
         with:
           repository: "rtbhouse-apps/github-workflows-pylibs"
-          ref: "different_repo"
+          ref: "master"
           path: "github-workflows-pylibs"
 
       - name: "Checkout"
@@ -211,7 +211,7 @@ jobs:
 
       - name: "Setup poetry ${{ matrix.poetry-version }}"
         run: |
-          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
+          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }} --force
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
 
       - name: "Configure poetry"
