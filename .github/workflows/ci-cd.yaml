@@ -218,6 +218,8 @@ jobs:
         env:
           PYPI_RW_AUTH: "${{ steps.secrets.outputs.PYPI_RW_AUTH }}"
         run: |
+          echo $PATH
+          ls $HOME/.poetry/bin
           export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
           export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
           echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@${{ inputs.lib-pip-url }}" >> $GITHUB_ENV
