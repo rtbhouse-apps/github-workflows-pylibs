@@ -158,7 +158,7 @@ jobs:
 
   release-development-package:
     name: "Release development package"
-    runs-on: "ubuntu-latest"
+    runs-on: "${{ inputs.ci-runs-on }}"
     if: "${{ !contains('refs/heads/master refs/heads/main', github.ref) }}"
 
     strategy:
@@ -261,7 +261,7 @@ jobs:
 
   release-final-package:
     name: "Release final package"
-    runs-on: "ubuntu-latest"
+    runs-on: "${{ inputs.ci-runs-on }}"
     needs: "ci"
     if: "contains('refs/heads/master refs/heads/main', github.ref)"
 
