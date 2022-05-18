@@ -205,7 +205,7 @@ jobs:
           python-version: "${{ matrix.python-version }}"
           cache: "pip"
 
-       - name: "Install util packages"
+      - name: "Install util packages"
         run: |
           pip install -r github-workflows-pylibs/requirements.txt
 
