@@ -211,7 +211,7 @@ jobs:
 
       - name: "Setup poetry ${{ matrix.poetry-version }}"
         run: |
-          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }} --force
+          POETRY_HOME="$HOME/.poetry" curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }} --force
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
 
       - name: "Configure poetry"
