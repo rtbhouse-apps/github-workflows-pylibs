@@ -200,7 +200,7 @@ jobs:
             PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/${{ inputs.lib-repo-secret }}
 
       - name: "Setup python ${{ matrix.python-version }}"
-        uses: "actions/setup-python@v2"
+        uses: "actions/setup-python@v4"
         with:
           python-version: "${{ matrix.python-version }}"
           cache: "pip"
@@ -307,7 +307,7 @@ jobs:
             PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/${{ inputs.lib-repo-secret }}
 
       - name: "Setup python ${{ matrix.python-version }}"
-        uses: "actions/setup-python@v2"
+        uses: "actions/setup-python@v4"
         with:
           python-version: "${{ matrix.python-version }}"
           cache: "pip"
