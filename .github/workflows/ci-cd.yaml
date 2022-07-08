@@ -72,7 +72,7 @@ jobs:
 
     steps:
       - name: "Checkout"
-        uses: "actions/checkout@v2"
+        uses: "actions/checkout@v3"
 
       - name: "Set dev docker image metadata"
         id: "docker-metadata"
@@ -173,14 +173,14 @@ jobs:
 
     steps:
       - name: "Checkout release scripts"
-        uses: "actions/checkout@v2"
+        uses: "actions/checkout@v3"
         with:
           repository: "rtbhouse-apps/github-workflows-pylibs"
           ref: "master"
           path: "github-workflows-pylibs"
 
       - name: "Checkout"
-        uses: "actions/checkout@v2"
+        uses: "actions/checkout@v3"
         with:
           path: "pylib"
 
@@ -279,14 +279,14 @@ jobs:
 
     steps:
       - name: "Checkout release scripts"
-        uses: "actions/checkout@v2"
+        uses: "actions/checkout@v3"
         with:
           repository: "rtbhouse-apps/github-workflows-pylibs"
           ref: "master"
           path: "github-workflows-pylibs"
 
       - name: "Checkout"
-        uses: "actions/checkout@v2"
+        uses: "actions/checkout@v3"
         with:
           path: "pylib"
 
