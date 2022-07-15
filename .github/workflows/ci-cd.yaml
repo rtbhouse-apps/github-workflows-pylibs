@@ -3,69 +3,122 @@ name: "CI / CD"
 on:
   workflow_call:
     inputs:
-      docker-registry:
-        description: "Docker registry"
-        required: false
-        default: "europe-west4-docker.pkg.dev"
-        type: "string"
-      docker-project-id:
-        description: "Docker project id"
-        required: false
-        default: "rtbhouse-apps"
-        type: "string"
-      docker-repository-id:
-        description: "Docker repository id"
-        required: false
-        default: "docker-pylibs"
-        type: "string"
-      docker-image-name:
-        description: "Docker image name"
-        required: true
-        type: "string"
-      context-dir:
-        description: "Component context dir"
-        required: false
-        default: "."
-        type: "string"
-      component:
-        description: "Component name"
-        required: false
-        default: "pylib"
-        type: "string"
       ci-runs-on:
         description: "The machine on which the CI will be run"
         required: false
-        default: "ubuntu-latest"
+        default: "ubuntu-22.04"
         type: "string"
-      lib-repo-url:
-        description: "Repository to put the library on publish"
+      publish-repository:
+        description: "The repository to which the package will be published"
         required: false
-        default: "https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/"
-        type: "string"
-      lib-pip-url:
-        description: "Address part of pip extra repo url"
-        required: false
-        default: "dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/"
-        type: "string"
-      lib-repo-secret:
-        description: "Secret that stores credentials to login to repository"
-        required: false
-        default: "CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS"
+        default: "rtbhouse-apps"
         type: "string"
       
-
 defaults:
   run:
     shell: "bash"
 
+env:
+  PYTHON_VERSION: "3.10"
+  POETRY_VERSION: "1.1.14"
+
 jobs:
+  prepare:
+    name: "Prepare"
+    runs-on: "ubuntu-22.04"
+    outputs:
+      publish-repo-url: "${{ steps.choose-publish-repo.outputs.publish-repo-url }}"
+      publish-repo-upload-url: "${{ steps.choose-publish-repo.outputs.publish-repo-upload-url }}"
+      publish-repo-secret: "${{ steps.choose-publish-repo.outputs.publish-repo-secret }}"
+      get-config: "${{ steps.should-get-config.outputs.get-config }}"
+      perform-tests: "${{ steps.should-perform-tests.outputs.perform-tests }}"
+      perform-lint: "${{ steps.should-perform-lint.outputs.perform-lint }}"
+      docker-image-name: "${{ steps.get-docker-image-name.outputs.docker-image-name }}"
+
+    steps:
+      - name: "Choose publish repo"
+        id: "choose-publish-repo"
+        run: |
+          if [[ "${{ inputs.publish-repository }}" == "rtbhouse-apps" ]]; then
+            REPO_URL="https://{LOGIN}:{TOKEN}@dl.cloudsmith.io/basic/rtbhouse-apps/rtbhouse-apps/python/simple/"
+            REPO_UPLOAD_URL="https://python.cloudsmith.io/rtbhouse-apps/rtbhouse-apps/"
+            REPO_SECRET="CLOUDSMITH_APPS_BASIC_AUTH_CREDENTIALS"
+          elif [[ "${{ inputs.publish-repository }}" == "rtbhouse-apps-internal" ]]; then
+            REPO_URL=" https://py-registry.dev.apps.rtbhouse.biz/"
+            REPO_UPLOAD_URL="${REPO_URL}"
+            REPO_SECRET="PY_REGISTRY_APPS_CREDENTIALS"
+          else
+            echo "::error::Unknown publish repo ${{ inputs.publish-repository }}"
+            exit 1
+          fi
+
+          echo "::set-output name=publish-repo-url::${REPO_URL}"
+          echo "::set-output name=publish-repo-upload-url::${REPO_UPLOAD_URL}"
+          echo "::set-output name=publish-repo-secret::${REPO_SECRET}"
+      
+      - name: "Checkout"
+        uses: "actions/checkout@v3"
+
+      - name: "Should get config"
+        id: "should-get-config"
+        run: |
+          if [ -f ./bin/ci/get_config.sh ]; then
+            GET_CONFIG=1
+          else
+            GET_CONFIG=0
+          fi
+          echo "::set-output name=get-config::${GET_CONFIG}"
+
+      - name: "Should perform tests"
+        id: "should-perform-tests"
+        run: |
+          if [ -f ./bin/ci/test.sh ]; then
+            TEST=1
+          else
+            TEST=0
+          fi
+          echo "::set-output name=perform-tests::${TEST}"
+
+          if [ ${TEST} == 0 ]; then
+            echo "::warning::No test script has been defined in this repository"
+          fi
+
+      - name: "Should perform lint"
+        id: "should-perform-lint"
+        run: |
+          if [ -f ./bin/ci/lint.sh ]; then
+            LINT=1
+          else
+            LINT=0
+          fi
+          echo "::set-output name=perform-lint::${LINT}"
+
+          if [ ${LINT} == 0 ]; then
+            echo "::warning::No lint script has been defined in this repository"
+          fi
+      
+      - name: "Get docker image name"
+        id: "get-docker-image-name"
+        run: |
+          DOCKER_IMAGE_NAME=$(yq -e '.services.pylib.image | split(":").0' docker-compose.yaml)
+          echo "::set-output name=docker-image-name::$DOCKER_IMAGE_NAME"
+        if: >
+          steps.should-perform-tests.outputs.perform-tests
+          || steps.should-perform-tests.outputs.perform-lint
+
+
   ci:
     name: "CI"
     runs-on: "${{ inputs.ci-runs-on }}"
+    needs: ["prepare"]
+    if: >
+      needs.prepare.outputs.perform-tests == 1
+      || needs.prepare.outputs.perform-lint == 1
+
     env:
       DOCKER_TAG: "${{ github.sha }}"
-      DOCKER_IMAGE: "${{ inputs.docker-registry }}/${{ inputs.docker-project-id }}/${{ inputs.docker-repository-id }}/${{ inputs.docker-image-name }}"
-    
+      DOCKER_IMAGE: "${{ needs.prepare.outputs.docker-image-name }}"
+
     permissions:
       contents: "read"
       id-token: "write"
@@ -86,6 +139,13 @@ jobs:
       - name: "Set up Docker Buildx"
         uses: "docker/setup-buildx-action@v2"
 
+      - name: "Should login to GCP Docker Registry"
+        id: "should-login-to-gcp-docker-registry"
+        run: |
+          if grep 'FROM[[:blank:]].\+rtbhouse-apps' Dockerfile > /dev/null; then
+            echo "::set-output name=should-login::1"
+          fi
+
       - name: "Authenticate to Google Cloud"
         id: "gcp-auth"
         uses: "google-github-actions/auth@v0"
@@ -94,13 +154,15 @@ jobs:
           workload_identity_provider: "projects/716804851657/locations/global/workloadIdentityPools/github-actions-identity-pool/providers/github-identity-pool-provider"
           service_account: "github-actions@rtbhouse-apps.iam.gserviceaccount.com"
           create_credentials_file: true
+        if: steps.should-login-to-gcp-docker-registry.outputs.should-login
 
       - name: "Login to Docker Registry"
         uses: "docker/login-action@v2"
         with:
-          registry: "${{ inputs.docker-registry }}"
+          registry: "europe-west4-docker.pkg.dev"
           username: "oauth2accesstoken"
           password: "${{ steps.gcp-auth.outputs.access_token }}"
+        if: steps.should-login-to-gcp-docker-registry.outputs.should-login
 
       - name: "Add uid and gid env vars"
         id: "set-uid-gid"
@@ -112,7 +174,6 @@ jobs:
         id: build-docker-image
         uses: "docker/build-push-action@v3"
         with:
-          context: "${{ inputs.context-dir }}"
           build-args: |
             UID=${{ steps.set-uid-gid.outputs.uid }}
             GID=${{ steps.set-uid-gid.outputs.gid }}
@@ -125,48 +186,35 @@ jobs:
 
       - name: "Lint"
         run: |
-          if [ -f ${{ inputs.context-dir }}/bin/docker/lint.sh ]; then
-            ${{ inputs.context-dir }}/bin/docker/lint.sh
-          else
-            echo "::warning::No lint has been defined for this repository"
-          fi
-          
+          ./bin/ci/lint.sh
+        if: needs.prepare.outputs.perform-lint == 1
+
       - name: "Get config"
         id: "get-config"
         run: |
-          if [ -f ${{ inputs.context-dir }}/bin/docker/get_ci_config.sh ]; then
-            ${{ inputs.context-dir }}/bin/docker/get_ci_config.sh
-          else
-            echo "::warning::No config been provided for CI for this repository"
-          fi
+          ./bin/ci/get_config.sh
         if: >
-          success()
-          || (failure()
-            && steps.build-docker-image.conclusion == 'success')
+          needs.prepare.outputs.perform-tests == 1
+          && needs.prepare.outputs.get-config == 1
+          && (success()
+            || (failure()
+              && steps.build-docker-image.conclusion == 'success'))
 
       - name: "Test"
         run: |
-          if [ -f ${{ inputs.context-dir }}/bin/docker/test.sh ]; then
-            ${{ inputs.context-dir }}/bin/docker/test.sh
-          else
-            echo "::warning::No tests has been defined for this repository"
-          fi
+          ./bin/ci/test.sh
         if: >
-          success()
-          || (failure()
-            && steps.get-config.conclusion == 'success')
+          needs.prepare.outputs.perform-tests == 1
+          && (success()
+            || (failure()
+              && steps.build-docker-image.conclusion == 'success'))
 
   release-development-package:
     name: "Release development package"
-    runs-on: "${{ inputs.ci-runs-on }}"
+    runs-on: "self-hosted"
+    needs: ["prepare"]
     if: "${{ !contains('refs/heads/master refs/heads/main', github.ref) }}"
 
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10"]
-        poetry-version: ["1.1.13"]
-    
     permissions:
       contents: "read"
       id-token: "write"
@@ -197,35 +245,34 @@ jobs:
         uses: "google-github-actions/get-secretmanager-secrets@v0"
         with:
           secrets: |-
-            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/${{ inputs.lib-repo-secret }}
+            PUBLISH_REPO_CREDENTIALS:projects/rtbhouse-apps/secrets/${{ needs.prepare.outputs.publish-repo-secret }}
 
-      - name: "Setup python ${{ matrix.python-version }}"
+      - name: "Setup python ${{ env.PYTHON_VERSION }}"
         uses: "actions/setup-python@v4"
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: "pip"
+
+      - name: "Setup poetry ${{ env.POETRY_VERSION }}"
+        run: |
+          curl -sSL https://install.python-poetry.org | POETRY_HOME="$HOME/.poetry" python - --version ${{ env.POETRY_VERSION }} --force
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: "Configure pip and poetry"
+        env:
+          PUBLISH_REPO_CREDENTIALS: "${{ steps.secrets.outputs.PUBLISH_REPO_CREDENTIALS }}"
+        run: |
+          export LOGIN=`jq -r .login <<< ${PUBLISH_REPO_CREDENTIALS}`
+          export TOKEN=`jq -r .token <<< ${PUBLISH_REPO_CREDENTIALS}`
+          PIP_EXTRA_INDEX_URL=$(echo ${{ needs.prepare.outputs.publish-repo-url }} | sed "s/{LOGIN}/${LOGIN}/" | sed "s/{TOKEN}/${TOKEN}/")
+          echo "PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}" >> $GITHUB_ENV
+          poetry config virtualenvs.in-project true
+          poetry config repositories.publish-repo "${{ needs.prepare.outputs.publish-repo-upload-url }}"
+          poetry config http-basic.publish-repo ${LOGIN} ${TOKEN}
 
       - name: "Install util packages"
         run: |
           pip install -r github-workflows-pylibs/requirements.txt
-
-      - name: "Setup poetry ${{ matrix.poetry-version }}"
-        run: |
-          curl -sSL https://install.python-poetry.org | POETRY_HOME="$HOME/.poetry" python - --version ${{ matrix.poetry-version }} --force
-          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
-
-      - name: "Configure poetry"
-        env:
-          PYPI_RW_AUTH: "${{ steps.secrets.outputs.PYPI_RW_AUTH }}"
-        run: |
-          echo $PATH
-          ls $HOME/.poetry/bin
-          export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
-          export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
-          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@${{ inputs.lib-pip-url }}" >> $GITHUB_ENV
-          poetry config virtualenvs.in-project true
-          poetry config repositories.rtbhouse-apps-publish ${{ inputs.lib-repo-url }}
-          poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
 
       - name: "Assert prod version"
         run: |
@@ -257,22 +304,15 @@ jobs:
       - name: "Publish dev package"
         run: |
           cd pylib
-          poetry publish --build --no-interaction --repository rtbhouse-apps-publish
+          poetry publish --build --no-interaction --repository publish-repo
         if: steps.should-publish-package.outputs.publish == 1
-
 
   release-final-package:
     name: "Release final package"
-    runs-on: "${{ inputs.ci-runs-on }}"
-    needs: "ci"
+    runs-on: "self-hosted"
+    needs: ["prepare", "ci"]
     if: "contains('refs/heads/master refs/heads/main', github.ref)"
 
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10"]
-        poetry-version: ["1.1.13"]
-    
     permissions:
       contents: "write"
       id-token: "write"
@@ -303,30 +343,30 @@ jobs:
         uses: "google-github-actions/get-secretmanager-secrets@v0"
         with:
           secrets: |-
-            PYPI_RO_TOKEN:projects/rtbhouse-apps/secrets/CLOUDSMITH_APPS_RO_TOKEN
-            PYPI_RW_AUTH:projects/rtbhouse-apps/secrets/${{ inputs.lib-repo-secret }}
+            PUBLISH_REPO_CREDENTIALS:projects/rtbhouse-apps/secrets/${{ needs.prepare.outputs.publish-repo-secret }}
 
-      - name: "Setup python ${{ matrix.python-version }}"
+      - name: "Setup python ${{ env.PYTHON_VERSION }}"
         uses: "actions/setup-python@v4"
         with:
-          python-version: "${{ matrix.python-version }}"
+          python-version: "${{ env.PYTHON_VERSION }}"
           cache: "pip"
 
-      - name: "Setup poetry ${{ matrix.poetry-version }}"
+      - name: "Setup poetry ${{ env.POETRY_VERSION }}"
         run: |
-          curl -sSL https://install.python-poetry.org | python - --version ${{ matrix.poetry-version }}
+          curl -sSL https://install.python-poetry.org | POETRY_HOME="$HOME/.poetry" python - --version ${{ env.POETRY_VERSION }} --force
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
 
       - name: "Configure poetry"
         env:
-          PYPI_RW_AUTH: "${{ steps.secrets.outputs.PYPI_RW_AUTH }}"
+          PUBLISH_REPO_CREDENTIALS: "${{ steps.secrets.outputs.PUBLISH_REPO_CREDENTIALS }}"
         run: |
-          export LOGIN=`jq -r .login <<< $PYPI_RW_AUTH`
-          export TOKEN=`jq -r .token <<< $PYPI_RW_AUTH`
-          echo "PIP_EXTRA_INDEX_URL=https://${LOGIN}:${TOKEN}@${{ inputs.lib-pip-url }}" >> $GITHUB_ENV
+          export LOGIN=`jq -r .login <<< ${PUBLISH_REPO_CREDENTIALS}`
+          export TOKEN=`jq -r .token <<< ${PUBLISH_REPO_CREDENTIALS}`
+          PIP_EXTRA_INDEX_URL=$(echo ${{ needs.prepare.outputs.publish-repo-url }} | sed "s/{LOGIN}/${LOGIN}/" | sed "s/{TOKEN}/${TOKEN}/")
+          echo "PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}" >> $GITHUB_ENV
           poetry config virtualenvs.in-project true
-          poetry config repositories.rtbhouse-apps-publish ${{ inputs.lib-repo-url }}
-          poetry config http-basic.rtbhouse-apps-publish ${LOGIN} ${TOKEN}
+          poetry config repositories.publish-repo "${{ needs.prepare.outputs.publish-repo-upload-url }}"
+          poetry config http-basic.publish-repo ${LOGIN} ${TOKEN}
 
       - name: "Install util packages"
         run: |
@@ -352,7 +392,7 @@ jobs:
               exit 1
             fi
           fi
-      
+
       - name: Get version
         id: get-version
         run: |
@@ -363,7 +403,7 @@ jobs:
       - name: "Publish final package"
         run: |
           cd pylib
-          poetry publish --build --no-interaction --repository rtbhouse-apps-publish
+          poetry publish --build --no-interaction --repository publish-repo
         if: steps.should-publish-package.outputs.publish == 1
 
       - name: Create release
